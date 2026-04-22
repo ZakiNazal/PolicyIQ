@@ -1,0 +1,57 @@
+# ─── Secrets & Environment ───────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# ─── Python / Backend ────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+.mypy_cache/
+.dmypy.json
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.cover
+*.log
+
+# ─── Flutter / Dart / Frontend ───────────────────────────────────────────────
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+pubspec.lock
+.pub-cache/
+.pub/
+build/
+flutter_*.png
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# ─── Docker ──────────────────────────────────────────────────────────────────
+.dockerignore
+
+# ─── IDEs & OS ───────────────────────────────────────────────────────────────
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
