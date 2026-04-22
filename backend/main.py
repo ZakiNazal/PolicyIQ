@@ -11,7 +11,15 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import AsyncGenerator
+
+from dotenv import load_dotenv
+
+# Load .env from the project root (one level up from backend/)
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(_env_path)
+
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
