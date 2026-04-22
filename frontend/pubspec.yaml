@@ -1,0 +1,35 @@
+name: policyiq_dashboard
+description: >
+  PolicyIQ — AI-powered policy stress-testing dashboard.
+  Visualises multi-agent simulation results for Malaysian government policies.
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: '>=3.19.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # HTTP client for REST calls and SSE stream consumption
+  http: ^1.2.1
+
+  # State management
+  provider: ^6.1.2
+
+  # Charting for sentiment heatmaps and timeline visualisations
+  fl_chart: ^0.68.0
+
+  # Material icons
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
