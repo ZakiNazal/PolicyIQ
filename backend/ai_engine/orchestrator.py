@@ -22,6 +22,9 @@ import os
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 
+import vertexai
+from vertexai.generative_models import GenerativeModel, GenerationConfig
+
 from ai_engine.physics import GlobalStateEngine
 from ai_engine.rag_client import RAGClient
 
@@ -55,6 +58,19 @@ class Orchestrator:
         self._tick_results: list[dict] = []
         self._agents: list[dict] = []
         self._gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+
+        # ── Vertex AI SDK initialisation ──────────────────────────────────────
+        _project  = os.getenv("GOOGLE_CLOUD_PROJECT", "")
+        _location = os.getenv("VERTEX_AI_LOCATION", "asia-southeast1")
+        if _project:
+            vertexai.init(project=_project, location=_location)
+            logger.info(
+                "Vertex AI initialised │ project=%s │ location=%s", _project, _location
+            )
+        else:
+            logger.warning(
+                "GOOGLE_CLOUD_PROJECT is not set — Vertex AI calls will fail at runtime."
+            )
 
     # ─── Prompt Loaders ───────────────────────────────────────────────────────
 
@@ -206,14 +222,15 @@ class Orchestrator:
 
     async def validate_policy(self, request) -> object:
         """
-        Contract Pre-A → Pre-B.
+        Contract Pre-A → Pre-B  —  The AI Gatekeeper.
 
-        TODO (Team AI): Replace the stub below with a real Gemini 1.5 Flash
-        call using the gatekeeper.txt prompt template.
+        Sends the raw policy text to Gemini 1.5 Flash using the
+        gatekeeper.txt prompt template and parses the strict JSON response
+        into a ValidatePolicyResponse.
 
-        The Gatekeeper must:
-          - Reject vague policies (no economic lever or target group)
-          - Return exactly 3 specific, mathematically viable refined_options
+        Robustness:
+          - Falls back to a safe "Invalid" response if the Gemini call fails
+            or the model returns malformed JSON.
         """
         # ── Import here to avoid circular deps at module load ─────────────────
         from schemas import ValidatePolicyResponse  # noqa: PLC0415
@@ -222,28 +239,63 @@ class Orchestrator:
         gatekeeper_prompt = self._load_prompt("gatekeeper.txt")
         logger.info("Gatekeeper prompt loaded (%d chars). Calling Gemini…", len(gatekeeper_prompt))
 
-        # ── STUB: Replace with real Gemini call ───────────────────────────────
-        # Heuristic check until Team AI wires up the LLM call.
-        has_target = any(kw in text.lower() for kw in ["b40", "m40", "t20", "poor", "rural", "urban"])
-        has_lever = any(kw in text.lower() for kw in ["rm", "subsidy", "transfer", "quota", "tax", "%"])
+        # ── Build the final prompt by injecting the policy text ───────────────
+        final_prompt = gatekeeper_prompt.replace("{{policy_text}}", text)
 
-        if has_target and has_lever:
-            return ValidatePolicyResponse(is_valid=True)
+        try:
+            # ── Gemini 1.5 Flash call ─────────────────────────────────────────
+            model = GenerativeModel(self._gemini_model)
+            response = model.generate_content(
+                final_prompt,
+                generation_config=GenerationConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,   # near-deterministic for a validation gate
+                    max_output_tokens=512,
+                ),
+            )
 
-        return ValidatePolicyResponse(
-            is_valid=False,
-            rejection_reason=(
-                "The policy lacks a specific economic lever (e.g. a RM amount, subsidy rate, "
-                "or percentage change) and/or does not clearly identify a target demographic "
-                "(e.g. B40, M40, Rural citizens)."
-            ),
-            refined_options=[
-                "Implement a targeted RM100 monthly cash transfer to the B40 demographic via PADU.",
-                "Introduce a tiered quota system where B40 citizens receive 50 litres of "
-                "subsidised RON95 per month.",
-                "Provide a 20 % income tax rebate for M40 households earning below RM 6,500/month.",
-            ],
-        )
+            raw_text = response.text.strip()
+            logger.info("Gatekeeper raw response: %s", raw_text[:300])
+
+            # ── Parse and validate the JSON against our Pydantic schema ───────
+            payload = json.loads(raw_text)
+
+            # Normalise: ensure refined_options is always a list
+            if not isinstance(payload.get("refined_options"), list):
+                payload["refined_options"] = []
+
+            # Enforce exactly 3 refined_options when is_valid is False
+            if not payload.get("is_valid", True) and len(payload["refined_options"]) != 3:
+                logger.warning(
+                    "Gatekeeper returned %d refined_options (expected 3); "
+                    "truncating/padding to 3.",
+                    len(payload["refined_options"]),
+                )
+                # Pad if fewer than 3
+                while len(payload["refined_options"]) < 3:
+                    payload["refined_options"].append(
+                        "Please resubmit the policy with a specific RM amount and target demographic."
+                    )
+                # Truncate if more than 3
+                payload["refined_options"] = payload["refined_options"][:3]
+
+            return ValidatePolicyResponse(**payload)
+
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Gatekeeper Gemini call failed: %s", exc)
+            # ── Safe fallback — never crash the endpoint ───────────────────────
+            return ValidatePolicyResponse(
+                is_valid=False,
+                rejection_reason=(
+                    "The policy validation service is temporarily unavailable. "
+                    "Please try again in a moment."
+                ),
+                refined_options=[
+                    "Please try submitting your policy again.",
+                    "Ensure your policy contains a specific RM amount or percentage.",
+                    "Make sure your policy targets a specific demographic (e.g. B40, M40, Rural).",
+                ],
+            )
 
     # ─── Dynamic Decomposition ────────────────────────────────────────────────
 
