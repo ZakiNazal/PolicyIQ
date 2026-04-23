@@ -562,7 +562,11 @@ class Orchestrator:
             self._physics.apply_overrides(_overrides)
 
         for tick_num in range(1, request.simulation_ticks + 1):
-            knob_state = self._physics.advance_tick()
+            # ── Step 4: Pass decomposition + agents for active state evolution ──
+            knob_state = self._physics.advance_tick(
+                decomposition=self._decomposition,
+                agents=self._agents,
+            )
             world_update = (
                 f"Month {tick_num}: The global economy shifts — "
                 f"disposable income delta is now {knob_state.disposable_income_delta:.2f}."
