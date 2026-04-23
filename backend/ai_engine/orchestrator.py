@@ -299,54 +299,178 @@ class Orchestrator:
 
     # ─── Dynamic Decomposition ────────────────────────────────────────────────
 
-    async def _decompose_policy(self, policy_text: str) -> dict:
-        """
-        Contract B: Translate policy text into GlobalState + 3–5 sub-layers.
+    # The 8 canonical knob names — used for per-knob 0.0 fallback safety.
+    _KNOB_NAMES: tuple[str, ...] = (
+        "disposable_income_delta",
+        "operational_expense_index",
+        "capital_access_pressure",
+        "systemic_friction",
+        "social_equity_weight",
+        "systemic_trust_baseline",
+        "future_mobility_index",
+        "ecological_pressure",
+    )
 
-        TODO (Team AI): Replace the stub below with a real Gemini call using
-        the decomposition.txt prompt template.  The response MUST be validated
-        against the PolicyDecomposition schema (schemas.py).
+    async def _decompose_policy(self, policy_text: str, knob_overrides: Optional[dict] = None) -> dict:
         """
+        Contract B: Translate validated policy text → GlobalState (8 knobs) + 3–5 sub-layers.
+
+        Uses Gemini 1.5 Pro with strict JSON output mode so the response maps
+        directly to the PolicyDecomposition Pydantic schema.
+
+        Reliability guarantees:
+          - Per-knob 0.0 defaulting: if Gemini omits any of the 8 knobs the
+            missing value is silently defaulted to 0.0 (no change) rather than
+            crashing the simulation.
+          - Percentage normalisation: string percentages such as "10%" are
+            converted to their float equivalents (0.10) before validation.
+          - Sub-layer count enforcement: fewer than 3 sub-layers are padded
+            with a neutral placeholder; more than 5 are truncated.
+          - On total Gemini failure the previous STUB defaults are returned so
+            the simulation degrades gracefully rather than crashing.
+
+        The resulting GlobalState knob values are written into
+        ``self._physics.knob_state`` (i.e. current_state) so downstream ticks
+        immediately start from the AI-determined baseline.
+        """
+        from schemas import PolicyDecomposition  # noqa: PLC0415
+
+        # ── 1. Load & fill the prompt template ───────────────────────────────
         decomposition_prompt = self._load_prompt("decomposition.txt")
-        logger.info("Decomposition prompt loaded (%d chars). Calling Gemini…", len(decomposition_prompt))
+        logger.info(
+            "Decomposition prompt loaded (%d chars). Calling Gemini 1.5 Pro…",
+            len(decomposition_prompt),
+        )
 
-        # ── STUB: Hardcoded decomposition for dev ─────────────────────────────
-        return {
-            "policy_summary": policy_text[:120],
-            "global_state": {
-                "disposable_income_delta": 0.3,
-                "operational_expense_index": 0.0,
-                "capital_access_pressure": 0.0,
-                "systemic_friction": -0.2,
-                "social_equity_weight": 0.5,
-                "systemic_trust_baseline": 0.4,
-                "future_mobility_index": 0.0,
-                "ecological_pressure": 0.0,
-            },
-            "dynamic_sub_layers": [
-                {
+        final_prompt = decomposition_prompt.replace("{{policy_text}}", policy_text)
+
+        # Inject knob overrides (or a clear "none" message so the model knows)
+        if knob_overrides:
+            overrides_text = json.dumps(knob_overrides, indent=2)
+        else:
+            overrides_text = "No manual overrides — determine all knob values from the policy text."
+        final_prompt = final_prompt.replace("{{knob_overrides}}", overrides_text)
+
+        try:
+            # ── 2. Call Gemini 1.5 Pro with strict JSON output ────────────────
+            pro_model = GenerativeModel("gemini-1.5-pro")
+            response = pro_model.generate_content(
+                final_prompt,
+                generation_config=GenerationConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2,        # low temperature — deterministic mapping
+                    max_output_tokens=1024,
+                ),
+            )
+
+            raw_text = response.text.strip()
+            logger.info("Decomposition raw response (first 500 chars): %s", raw_text[:500])
+
+            # ── 3. Parse JSON ─────────────────────────────────────────────────
+            payload = json.loads(raw_text)
+
+            # ── 4. Per-knob 0.0 fallback safety ──────────────────────────────
+            # Gemini sometimes omits knobs it considers "not affected". We
+            # default those to 0.0 so the physics engine never receives KeyError.
+            raw_global_state: dict = payload.get("global_state", {})
+            safe_global_state: dict[str, float] = {}
+            for knob in self._KNOB_NAMES:
+                raw_val = raw_global_state.get(knob, 0.0)
+                # Normalise percentage strings → float (e.g. "10%" → 0.10)
+                if isinstance(raw_val, str) and raw_val.endswith("%"):
+                    try:
+                        raw_val = float(raw_val.rstrip("%")) / 100.0
+                    except ValueError:
+                        logger.warning(
+                            "Could not parse percentage string '%s' for knob '%s'; defaulting to 0.0.",
+                            raw_val, knob,
+                        )
+                        raw_val = 0.0
+                # Clamp to [-1.0, 1.0]
+                try:
+                    safe_global_state[knob] = max(-1.0, min(1.0, float(raw_val)))
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Non-numeric value '%s' for knob '%s'; defaulting to 0.0.",
+                        raw_val, knob,
+                    )
+                    safe_global_state[knob] = 0.0
+
+            payload["global_state"] = safe_global_state
+
+            # ── 5. Sub-layer count enforcement ────────────────────────────────
+            sub_layers: list = payload.get("dynamic_sub_layers", [])
+            while len(sub_layers) < 3:
+                logger.warning(
+                    "Gemini returned only %d sub-layer(s); padding to 3.", len(sub_layers)
+                )
+                sub_layers.append({
                     "parent_knob": "disposable_income_delta",
-                    "sub_layer_name": "Direct Cash Injection",
-                    "target_demographic": ["B40"],
-                    "impact_multiplier": 0.80,
-                    "description": "Immediate increase in monthly liquidity for essential goods.",
-                },
-                {
-                    "parent_knob": "systemic_friction",
-                    "sub_layer_name": "PADU Registration Burden",
-                    "target_demographic": ["Rural", "Elderly"],
-                    "impact_multiplier": -0.40,
-                    "description": "Time spent navigating digital registration to claim funds.",
-                },
-                {
-                    "parent_knob": "social_equity_weight",
-                    "sub_layer_name": "Perceived Fairness Boost",
+                    "sub_layer_name": "General Policy Effect",
                     "target_demographic": ["B40", "M40"],
-                    "impact_multiplier": 0.50,
-                    "description": "Improved public trust in government redistribution.",
-                },
-            ],
-        }
+                    "impact_multiplier": 0.0,
+                    "description": "Neutral placeholder sub-layer (AI did not provide enough detail).",
+                })
+            payload["dynamic_sub_layers"] = sub_layers[:5]  # enforce max 5
+
+            # Ensure policy_summary is present
+            if not payload.get("policy_summary"):
+                payload["policy_summary"] = policy_text[:120]
+
+            # ── 6. Validate against the Pydantic schema ───────────────────────
+            decomposition = PolicyDecomposition(**payload)
+            logger.info(
+                "Decomposition validated ✓ │ knobs=%s │ sub_layers=%d",
+                safe_global_state,
+                len(decomposition.dynamic_sub_layers),
+            )
+
+            # ── 7. Store in current_state (self._physics.knob_state) ──────────
+            # Write the AI-determined knob values directly into the physics
+            # engine so that advance_tick() starts from the correct baseline.
+            for knob, value in safe_global_state.items():
+                if hasattr(self._physics.knob_state, knob):
+                    setattr(self._physics.knob_state, knob, value)
+            self._physics.knob_state.clamp()
+            logger.info(
+                "GlobalState written to physics engine │ current_state=%s",
+                self._physics.knob_state.to_dict(),
+            )
+
+            return decomposition.model_dump()
+
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Policy Decomposer Gemini call failed — degrading to safe defaults: %s", exc
+            )
+            # ── Safe fallback: return neutral decomposition, never crash ───────
+            return {
+                "policy_summary": policy_text[:120],
+                "global_state": {knob: 0.0 for knob in self._KNOB_NAMES},
+                "dynamic_sub_layers": [
+                    {
+                        "parent_knob": "disposable_income_delta",
+                        "sub_layer_name": "Fallback — Direct Effect",
+                        "target_demographic": ["B40"],
+                        "impact_multiplier": 0.0,
+                        "description": "Decomposition service unavailable; using neutral baseline.",
+                    },
+                    {
+                        "parent_knob": "systemic_friction",
+                        "sub_layer_name": "Fallback — Friction Baseline",
+                        "target_demographic": ["B40", "M40"],
+                        "impact_multiplier": 0.0,
+                        "description": "Neutral placeholder while decomposition recovers.",
+                    },
+                    {
+                        "parent_knob": "social_equity_weight",
+                        "sub_layer_name": "Fallback — Equity Baseline",
+                        "target_demographic": ["B40", "M40", "T20"],
+                        "impact_multiplier": 0.0,
+                        "description": "Neutral placeholder while decomposition recovers.",
+                    },
+                ],
+            }
 
     # ─── Agent Observation Generation ────────────────────────────────────────
 
@@ -423,11 +547,19 @@ class Orchestrator:
         self._agents = self._load_agents()[: request.agent_count]
 
         # Decompose policy → seed physics engine
-        self._decomposition = await self._decompose_policy(request.policy_text)
-        self._physics.initialize_from_decomposition(self._decomposition)
-        self._physics.apply_overrides(
-            request.knob_overrides.model_dump(exclude_none=True)
+        # Pass any manual knob overrides so the AI prompt can factor them in.
+        _overrides = request.knob_overrides.model_dump(exclude_none=True)
+        self._decomposition = await self._decompose_policy(
+            request.policy_text,
+            knob_overrides=_overrides if _overrides else None,
         )
+        # initialize_from_decomposition registers the sub-layers in the physics
+        # engine. _decompose_policy already wrote the knob values directly into
+        # self._physics.knob_state, so this call will overwrite them — we then
+        # re-apply any manual overrides on top.
+        self._physics.initialize_from_decomposition(self._decomposition)
+        if _overrides:
+            self._physics.apply_overrides(_overrides)
 
         for tick_num in range(1, request.simulation_ticks + 1):
             knob_state = self._physics.advance_tick()
