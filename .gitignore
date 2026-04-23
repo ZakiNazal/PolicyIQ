@@ -5,6 +5,13 @@
 *.key
 *.pem
 
+# ─── GCP Service Account Keys (NEVER commit these) ───────────────────────────
+service_account.json
+*-credentials.json
+*-serviceaccount.json
+backend/*.json
+!backend/ai_engine/agent_dna/agents_master.json
+
 # ─── Python / Backend ────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

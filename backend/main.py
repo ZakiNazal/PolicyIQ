@@ -16,9 +16,11 @@ from typing import AsyncGenerator
 
 from dotenv import load_dotenv
 
-# Load .env from the project root (one level up from backend/)
+# Load .env from the project root (one level up from backend/).
+# Uses override=False so Docker env_file values always take precedence.
+# If .env doesn't exist (Docker), this is silently a no-op.
 _env_path = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(_env_path)
+load_dotenv(_env_path, override=False)
 
 
 from fastapi import FastAPI, HTTPException
@@ -60,8 +62,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── Shared orchestrator instance ────────────────────────────────────────────
-orchestrator = Orchestrator()
+# ─── Orchestrator ────────────────────────────────────────────────────────────
+# NOTE: validate_policy is stateless so a shared instance is safe.
+# run_simulation holds per-request state (_tick_results, _agents, etc.)
+# so /simulate creates a FRESH Orchestrator per call to prevent data
+# corruption under concurrent requests.
+_shared_orchestrator = Orchestrator()
 
 
 # ─── Health ──────────────────────────────────────────────────────────────────
@@ -91,7 +97,7 @@ async def validate_policy(request: ValidatePolicyRequest) -> ValidatePolicyRespo
     """
     logger.info("Gatekeeper received policy: %.80s…", request.raw_policy_text)
     try:
-        result: ValidatePolicyResponse = await orchestrator.validate_policy(request)
+        result: ValidatePolicyResponse = await _shared_orchestrator.validate_policy(request)
         return result
     except Exception as exc:
         logger.exception("Gatekeeper error")
@@ -123,15 +129,19 @@ async def simulate(request: SimulateRequest) -> EventSourceResponse:
         request.agent_count,
     )
 
+    # Fresh Orchestrator per request — prevents state leakage between
+    # concurrent simulation calls.
+    request_orchestrator = Orchestrator()
+
     async def event_generator() -> AsyncGenerator[dict, None]:
         try:
-            async for tick_payload in orchestrator.run_simulation(request):
+            async for tick_payload in request_orchestrator.run_simulation(request):
                 yield {
                     "event": "tick",
                     "data": json.dumps(tick_payload),
                 }
             # Final aggregated result
-            final: SimulateResponse = await orchestrator.get_final_result()
+            final: SimulateResponse = await request_orchestrator.get_final_result()
             yield {
                 "event": "complete",
                 "data": final.model_dump_json(),
