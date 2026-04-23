@@ -1,11 +1,11 @@
-/// api_client.dart — PolicyIQ HTTP + SSE Client
-///
-/// Provides:
-///   - [validatePolicy]  POST /validate-policy  (Contract Pre-A → Pre-B)
-///   - [simulateStream]  POST /simulate          (Contract A → SSE tick/complete events)
-///
-/// Also exposes [SimulationState] — a ChangeNotifier that the Provider tree
-/// uses to drive UI rebuilds.
+// api_client.dart — PolicyIQ HTTP + SSE Client
+//
+// Provides:
+//   - [validatePolicy]  POST /validate-policy  (Contract Pre-A → Pre-B)
+//   - [simulateStream]  POST /simulate          (Contract A → SSE tick/complete events)
+//
+// Also exposes [SimulationState] — a ChangeNotifier that the Provider tree
+// uses to drive UI rebuilds.
 
 import 'dart:async';
 import 'dart:convert';

@@ -1,7 +1,7 @@
-/// contracts.dart — Dart model classes for all API Contracts (Pre-A through E).
-///
-/// Mirrors the Pydantic schemas in backend/schemas.py exactly so that
-/// JSON serialisation/deserialisation is symmetric.
+// contracts.dart — Dart model classes for all API Contracts (Pre-A through E).
+//
+// Mirrors the Pydantic schemas in backend/schemas.py exactly so that
+// JSON serialisation/deserialisation is symmetric.
 
 // ─── Contract Pre-A ──────────────────────────────────────────────────────────
 
